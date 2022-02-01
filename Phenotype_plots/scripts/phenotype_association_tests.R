@@ -12,12 +12,16 @@
 ################################################################################
 
 library(ggplot2)
-library(stringr)
 library(ggpubr)
 
 ## Load the data
-phenotype_table = read.csv("../data/phenotypic_data.csv",
-                           sep = ",", header = T, dec = ".")
+# It is recommended to use the <- symbol for assignment in R, because it truly distinguishes
+#  assignment from arguments to function calls. I will only make the change once in this
+#  script so as not to make too many unnecessary changes
+phenotype_table <- read.csv("../data/phenotypic_data.csv",
+			    # preferably use full version (TRUE and FALSE) for logical values in scripts
+			    # T and F are OK for interactive use
+			    sep = ",", header = TRUE, dec = ".")
 
 genotype_table = read.csv("../data/genotypic_data.csv", 
                     header = TRUE, sep = ",", check.names = FALSE, 
@@ -28,34 +32,35 @@ genotype_table = read.csv("../data/genotypic_data.csv",
 # Can the following for loop be replaced by a more R-esque way of doing things?
 # Using apply functions for example?
 
-count = 0
-# For each line in phenotype table
-for (i in 1:nrow(phenotype_table)){
-  # Get id name
-  id = phenotype_table[i, 1]
-  # Get genotype information in the genotype table from id name
-  line_number = grep(id, genotype_table$Id)
-  # If the id from the phenotype table was found in the genotype table...
-  if (!length(line_number) == 0){
-    # ...only get the information of interest from the genotype table
-    line = genotype_table[line_number, 2]
-    genotype = str_split(line, ":")
-    genotype = genotype[[1]][1]
-    # Concatenate information from the phenotype and genotype tables
-    new_line = cbind(phenotype_table[i,], genotype)
-    # If it is the first line just create a new vector
-    if (count == 0){
-      new_df = new_line
-    # If it is not the first line add to already created rows
-    } else {
-      new_df = rbind(new_df, new_line)
-    }
-    count = count + 1
-  }
-} 
+# The match function can be used here to simplify things
+# I prefer to use column names (strings) instead of column numbers (integers) when subsetting
+#  because it makes it much clearer when reading the code
+phenotype_table$genotype <- genotype_table[match(phenotype_table$IDs, genotype_table$Id), "Genotype"]
+
+# Then we need to remove the NA values (those for which no match in genotype_table was found)
+phenotype_table <- phenotype_table[!is.na(phenotype_table$genotype), ]
+
+# Replacing the contents of then Genotype column with the genotype part only
+# See more explanations below for the use of sapply; here I am using `[` as a function
+#  to extract the first element of each vector returned by strsplit
+phenotype_table$genotype <- sapply(strsplit(phenotype_table$genotype, ":"), `[`, 1)
+
+# Note that I use the strsplit function of the base package instead of str_split from stringr
+# I know that functions in stringr are often more computationally efficient for manipulating
+# strings. However, when computational efficiency is not a concern (like here), I like to
+# avoid relying on external packages. This is just a personal preference.
+
+# I would also use the "phenotype_table" object throughout the analysis; this may or may not be
+# desirable if you need to access the original data.frame later in the analysis. However,
+# this does not seem to be the case here, therefore doing so reduces the number of distinct
+# objects created
+# Here, I will change the name back to final_df so I don't have to change all references to it below
+final_df <- phenotype_table
 
 # Reorganize columns
-final_df = cbind(new_df$IDs, new_df$genotype, new_df[, 2:18])
+# You don't need to use cbind when reordering columns; you can simply use the order of column indices
+# Here is one case where I recommend using integer column indices; it's much easier than writing out names
+final_df <- final_df[, c(1, 19, 2:18)] 
 
 # Change column names
 colnames(final_df) = c("ids",
@@ -81,7 +86,7 @@ colnames(final_df) = c("ids",
 # Remove unknown genotypes and change genotype names
 final_df = final_df[final_df$Genotype != "./.", ]
 final_df$Genotype = as.character(final_df$Genotype)
-final_df[final_df$Genotype == "1/0", 2] = "0/1"
+final_df[final_df$Genotype == "1/0", "Genotype"] = "0/1"
 
 ## Output boxplots
 
@@ -90,33 +95,52 @@ final_df[final_df$Genotype == "1/0", 2] = "0/1"
 # In addition, is there a more efficient way of dealing with variable names
 # containing variables? Or can you see a way of avoiding them all together? 
 
-# For a sequence number corresponding to the number of phenotypic traits analyzed
-for (i in 3:19){
-  # Create a variable name containing the current iteration number of the for loop
-  reg_name = paste("reg", i, sep = "")
-  # Perform a linear regression between the three genotypes and a phenotypic trait
-  reg = lm(final_df[[i]] ~ final_df$Genotype)
-  # Give the variable name with the current iteration number to the linear regression object
-  assign(reg_name, reg)
-  # Create a variable name containing the current iteration number of the for loop
-  plot_name = paste("p", i, sep = "")
-  # Get the name of the phenotypic trait currently analyzed
-  col_name = colnames(final_df[i])
-  # Plot the genotypes against the data for the currently analyzed phenotypic trait
-  plot = ggplot(data = final_df,
-                aes_string(x = "Genotype",
-                    y = col_name)) +
-    geom_boxplot() +
-    geom_abline(slope = coef(eval(as.name(reg_name)))[[2]], 
-                intercept = coef(eval(as.name(reg_name)))[[1]],
-                colour = "red") +
-    ylab(colnames(final_df[i]))
-  # Give the variable name with the current iteration number to the plot object
-  assign(plot_name, plot)
+# The lapply function can be used to iterate over all values in a list
+# Its first argument is a list:
+#  Here we can pass a data.frame because a data.frame is actually a list
+# Its second argument is a function that will be applied to each element of the list:
+#  The function can be defined beforehand and its name written out.
+#  Here, I will instead use an anonymous function defined directly inside the function call
+#  Additional arguments to the function (here, the genotype data)
+#  can be passed as additional arguments to lapply
+regressions <- lapply(final_df[, 3:19],
+		      function(x, genotypes) lm(x ~ genotypes),
+		      genotypes = final_df$Genotype)
+
+# the value returned is a list with one element per element in the original list
+# Here, regressions is therefore a list of regression results, with names matching
+# those of the original columns
+# Assigning such intermediate results inside a list is a better approach than
+# using "assign" as below because it stores the results together and does not
+# clutter the global environment; all regressions can be accessed from within
+# a single list; it also avoids having to access the objects using "eval"
+
+# sapply (used above) is a version of lapply that simplifies the output into
+# a vector of the appropriate type (when applicable)
+
+# I will use a slightly different approach (for loop) for generating the plots
+# However, I will still assign the results into a list as lapply would have done
+plots <- list()
+
+# We iterate over the phenotype names, which can be used to access data columns,
+#  regression results, and to assign elements in the "plots" list
+for(i in names(final_df)[3:19]) {
+	plots[[i]] <- ggplot(data = final_df,
+			     mapping = aes_string(x = "Genotype", y = i)) +
+			geom_boxplot() +
+			geom_abline(slope = coef(regressions[[i]])[[2]],
+				    intercept = coef(regressions[[i]])[[1]],
+				    colour = "red") +
+			ylab(i)
 }
 
-# Organize all plots in a single figure
-ggarrange(p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15,
-          p16, p17, p18, p19, nrow = 5, ncol = 4)
+# Preparing a list of arguments to ggarrange from the plots list
+# We only need to add arguments for nrow and ncol
+plots$nrow <- 5
+plots$ncol <- 4
+do.call("ggarrange", plots)
 
 # Last question: why is R such a horrible programming language?
+# It's not, but I guess the reason why it is frustrating is that it was developed
+# for data analysts/statisticians and not for programmers. But we can talk
+# more about that later on!
